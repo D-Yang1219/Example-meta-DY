@@ -1,0 +1,214 @@
+---
+title: "Meta analysis for v2 FPKM and AMU in veal calves"
+author: "Roosmarijn & Dongsheng"
+date: "01-03-2021"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+ 
+ 
+## Library packages
+```{r}
+library(dplyr) # data management
+library(broom) # tidy()function
+library(metafor) # meta analysis
+library(stringi) # string replacement
+library(openxlsx) # open xlsx files
+library(data.table) # replace country names with anonymized letters
+library(FSA) # FDR analysis
+library(psych) # FDR analysis
+```
+
+
+## Load and clean the data
+```{r}
+# load data
+d1<- 'O:/DGK/IRAS/EEPI/Projects/EFFORT/WP1/Folder Dongsheng/Paper 2 to fit with Denmark/Final check before submitting/Data and code'
+v2_FPKM_FACTOR_VEAL<- read.xlsx(paste0(d1,'/v2_FPKM_FACTOR_VEAL.xlsx'))
+
+# anonymize countries
+v2_FPKM_FACTOR_VEAL<- data.table(v2_FPKM_FACTOR_VEAL)
+v2_FPKM_FACTOR_VEAL[, Country := ifelse(country %in% "DE", "B",
+                                             ifelse(country %in% "FR", "E",
+                                                    ifelse(country %in% "NL", "F", 
+                                                           NA)))]
+
+# combine AMU classes in v2 FPKM in veal 
+# as some AMU classes are combined used together in the treatment
+v2_FPKM_FACTOR_VEAL$TIdddvet.Quinolones_total<- v2_FPKM_FACTOR_VEAL$TIdddvet.Fluoroquinolones+
+                                                v2_FPKM_FACTOR_VEAL$TIdddvet.Other.quinolones
+v2_FPKM_FACTOR_VEAL$TIdddvet.Beta_lactam<- v2_FPKM_FACTOR_VEAL$TIdddvet.Aminopenicillins+
+                                           v2_FPKM_FACTOR_VEAL$TIdddvet.Penicillins+
+                                           v2_FPKM_FACTOR_VEAL$TIdddvet.Cephalosporins
+v2_FPKM_FACTOR_VEAL$TIdddvet.MLS_total<- v2_FPKM_FACTOR_VEAL$TIdddvet.Macrolides+
+                                         v2_FPKM_FACTOR_VEAL$`TIdddvet.Linco&Spectino`
+v2_FPKM_FACTOR_VEAL$TIdddvet.Trim_Sulfa_total<- v2_FPKM_FACTOR_VEAL$`TIdddvet.Trim&Sulfa`+
+                                                v2_FPKM_FACTOR_VEAL$TIdddvet.Sulphonamides
+
+# combine AMR classes in v2 FPKM in veal
+# corresponding to the combined AMU classes
+v2_FPKM_FACTOR_VEAL$Amino_total<- v2_FPKM_FACTOR_VEAL$Aminoglycoside+v2_FPKM_FACTOR_VEAL$AmGlyc.Quin
+v2_FPKM_FACTOR_VEAL$Macro_total<- v2_FPKM_FACTOR_VEAL$Macrolide+v2_FPKM_FACTOR_VEAL$Mac.Oxa.Phen
+v2_FPKM_FACTOR_VEAL$Oxazolid_total<- v2_FPKM_FACTOR_VEAL$Oxazolidinone+v2_FPKM_FACTOR_VEAL$Mac.Oxa.Phen+
+                                     v2_FPKM_FACTOR_VEAL$Oxa.Phen
+v2_FPKM_FACTOR_VEAL$Phenicol_total<- v2_FPKM_FACTOR_VEAL$Phenicol+v2_FPKM_FACTOR_VEAL$Mac.Oxa.Phen+
+                                     v2_FPKM_FACTOR_VEAL$Oxa.Phen
+v2_FPKM_FACTOR_VEAL$Quino_total<- v2_FPKM_FACTOR_VEAL$Quinolone+v2_FPKM_FACTOR_VEAL$AmGlyc.Quin
+
+# sum all AMR to get the total AMR
+which(colnames(v2_FPKM_FACTOR_VEAL) =="Sulphonamide")
+which(colnames(v2_FPKM_FACTOR_VEAL) =="Fusidic.acid")
+v2_FPKM_FACTOR_VEAL$total_FPKM<- rowSums(v2_FPKM_FACTOR_VEAL[,c(215:232)])
+```
+
+
+## Log10 transformation
+## The original AMU and AMR data is right skewed, log transformation makes the distribution more normal
+```{r}
+# log10(AMR+1)
+# 1 was added as a pseudocount of zero before log transformation
+which(colnames(v2_FPKM_FACTOR_VEAL) =="Sulphonamide")
+which(colnames(v2_FPKM_FACTOR_VEAL) =="Fusidic.acid")
+which(colnames(v2_FPKM_FACTOR_VEAL) =="Amino_total")
+which(colnames(v2_FPKM_FACTOR_VEAL) =="total_FPKM")
+v2_FPKM_FACTOR_VEAL[,c(215:232,322:327)]<- log10(v2_FPKM_FACTOR_VEAL[,c(215:232,322:327)] + 1)
+
+# log10(AMU+1)
+# 1 was added as a pseudocount of zero before log transformation
+which(colnames(v2_FPKM_FACTOR_VEAL) =="TIdddvet.farm_group")
+which(colnames(v2_FPKM_FACTOR_VEAL) =="TIdddvet.Trim&Sulfa")
+which(colnames(v2_FPKM_FACTOR_VEAL) =="TIdddvet.Quinolones_total")
+which(colnames(v2_FPKM_FACTOR_VEAL) =="TIdddvet.Trim_Sulfa_total")
+v2_FPKM_FACTOR_VEAL[,c(2:15,318:321)]<- log10(v2_FPKM_FACTOR_VEAL[,c(2:15,318:321)] + 1)
+```
+
+
+## Meta analysis
+```{r}
+# name the y and x variables that you want to match in different sheets of the excel
+
+dat <- read.xlsx(paste0(d1,"/x_y_analysis_v2_FPKM_veal.xlsx"), sheet="v2-FPKM-AMU") # choose sheet names
+old_new = read.xlsx(paste0(d1,"/old_new_v2_FPKM_veal.xlsx"), sheet="Sheet1") # rename the variables in the model to be general names
+
+
+# combine the whole result dataset (data_MA)
+newy <- rep(0,length(dat$y)) # match the model variable names and the general names
+newx <- rep(0,length(dat$y)) # match the model variable names and the general names
+b <- rep(0,length(dat$y)) # beta of the regression
+p <- rep(0,length(dat$y)) # raw p value
+q <- rep(0,length(dat$y)) # heterogeneity p value
+lb <- rep(0,length(dat$y)) # lower limit CI
+ub <- rep(0,length(dat$y)) # upper limit CI
+ci <- rep(0,length(dat$y)) # CI
+c <- rep(0,length(dat$y)) # country involved
+f <- rep(0,length(dat$y)) # country and farm numbers involved 
+r2 <- rep(0,length(dat$y)) # explained variance = R2
+
+data_MA <- cbind.data.frame(dat$y,dat$x1,newy,newx,b,p,q,lb,ub,ci,c, f, r2) 
+
+
+# script for linear modeling in loop + forest plot + output in table --> it will loop over all comparisons from the file: dat
+
+for (i in 1:nrow(data_MA)) { 
+  temp = data_MA[i,]
+  y_loop = temp[1,1]
+  x1_loop = temp[1,2]
+  
+  formula = paste0('scale(',y_loop,') ~ ',x1_loop,'')
+  a = tryCatch({fitted_models =  v2_FPKM_FACTOR_VEAL%>% group_by(country) %>% do(model = lm(as.formula(formula),    data = .))
+  output_fitted_models <-fitted_models %>% tidy(model)
+  data <- subset(output_fitted_models, term == x1_loop) 
+  
+  labs <- data$country
+  yi   <- data$estimate
+  sei  <- data$std.error
+  
+  res  <- rma(yi=yi, sei=sei,  method="DL", slab = paste(labs, sep = "-"))
+  summary(res)
+  weigh <- weights(res, type="diagonal")
+  
+  filename_loop = paste0("Forest_",y_loop,"_",x1_loop,".png") # automatically save the forest figures
+  
+  png(filename=filename_loop, res=300, width=6*300, height=5*300, type="cairo", pointsize = 9)
+  
+  # forest plot
+  forest(res, transf=, refline=0, xlab="Estimate", mlab="Summary Estimate", annotate=TRUE, at=c(-2, 0, 12),
+         showweights = TRUE, digits = 2)
+  mtext(formula,side=3, line=2, col = "blue", cex = 1) 
+  mtext(paste("Association p-value=",formatC(summary(res)$pval, format = "f", digits = 4)),side=3, line=0) 
+  mtext(paste("Heterogeneity p-value=",formatC(summary(res)$QEp, format = "f", digits = 4)),side=3, line=-1.25)
+  mtext("Weight     Estimate [95% CI]",side=3, line=-3, adj = 1)
+  mtext("country    Farms that report ",side=3, line=-3, adj = 0) # number of included farms per country
+  dev.off()
+  
+  # next part will fill up the empty data_MA (created in the beginning) with values from the meta-analysis
+  
+  data_MA$newy[i] = stri_replace_all_regex(y_loop,'\\b'%s+%old_new$old%s+%'\\b',old_new$new,vectorize_all = FALSE)
+  data_MA$newx[i] = stri_replace_all_regex(x1_loop,'\\b'%s+%old_new$old%s+%'\\b',old_new$new,vectorize_all = FALSE)
+  data_MA$b[i] = summary(res)$b[1]
+  data_MA$p[i] = summary(res)$pval
+  data_MA$q[i] = summary(res)$QEp
+  data_MA$lb[i] = summary(res)$ci.lb
+  data_MA$ub[i] = summary(res)$ci.ub
+  data_MA$ci[i] = sprintf("[%.2f-%.2f]",summary(res)$ci.lb,summary(res)$ci.ub)
+  data_MA$c[i] = paste0(data$country, collapse=",")
+  country_numbers = dplyr::summarise(dplyr::group_by(v2_FPKM_FACTOR_VEAL[v2_FPKM_FACTOR_VEAL[[as.character(x1_loop)]]>0,],country),number = n())
+  data_MA$f[i]=paste0(do.call(paste,c(country_numbers[c("country","number")],sep="-")),collapse=',')
+  }, warning = function(war) {
+    writeLines(paste("\nMy warning:",war,"\n"))
+  }, error = function(err) {
+    writeLines(paste("\nMy error:",err,"\n"))
+  }, finally = {
+  })
+} 
+
+# export the results for further FDR analysis 
+write.table(data_MA, file = paste0(d1,"/MA_output_v2_FPKM_veal.txt")) 
+# this file will be the input for FDR script
+```
+
+
+## FDR analysis of v2 FPKM in veal calves
+```{r}
+# import and rename group data for v2_FPKM
+data_MA_v2_FPKM_veal<- read.table(paste0(d1,"/MA_output_v2_FPKM_veal.txt"))
+
+data_MA_v2_FPKM_veal$Raw.p <- data_MA_v2_FPKM_veal$p
+
+data_MA_v2_FPKM_veal1 = subset(data_MA_v2_FPKM_veal, Raw.p > 0)
+
+headTail(data_MA_v2_FPKM_veal1)
+
+data_MA_v2_FPKM_veal1$Bonferroni = 
+  p.adjust(data_MA_v2_FPKM_veal1$Raw.p, 
+           method = "bonferroni")
+
+data_MA_v2_FPKM_veal1$BH = 
+  p.adjust(data_MA_v2_FPKM_veal1$Raw.p, 
+           method = "BH") #The FDR P value
+
+data_MA_v2_FPKM_veal1$Holm = 
+  p.adjust(data_MA_v2_FPKM_veal1$ Raw.p, 
+           method = "holm")
+
+data_MA_v2_FPKM_veal1$Hochberg = 
+  p.adjust(data_MA_v2_FPKM_veal1$ Raw.p, 
+           method = "hochberg")
+
+data_MA_v2_FPKM_veal1$Hommel = 
+  p.adjust(data_MA_v2_FPKM_veal1$ Raw.p, 
+           method = "hommel")
+
+data_MA_v2_FPKM_veal1$BY = 
+  p.adjust(data_MA_v2_FPKM_veal1$ Raw.p, 
+           method = "BY")
+
+# export the results
+write.xlsx(data_MA_v2_FPKM_veal1, file=paste0(d1,"/Meta_FDR_output_v2_FPKM_veal.xlsx"))
+```
+
