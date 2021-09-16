@@ -1,7 +1,7 @@
 ---
 title: "Meta analysis for v2 FPKM and AMU in veal calves"
 author: "Roosmarijn & Dongsheng"
-date: "01-03-2021"
+date: "16-09-2021"
 output:
   html_document: default
   pdf_document: default
@@ -28,7 +28,7 @@ library(psych) # FDR analysis
 ## Load and clean the data
 ```{r}
 # load data
-d1<- 'O:/DGK/IRAS/EEPI/Projects/EFFORT/WP1/Folder Dongsheng/Paper 2 to fit with Denmark/Final check before submitting/Data and code'
+d1<- '/Data and code'
 v2_FPKM_FACTOR_VEAL<- read.xlsx(paste0(d1,'/v2_FPKM_FACTOR_VEAL.xlsx'))
 
 # anonymize countries
